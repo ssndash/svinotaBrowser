@@ -1,6 +1,6 @@
 ![Firefox Browser](./docs/readme/readme-banner.svg)
-
-[Firefox](https://firefox.com/) is a fast, reliable and private web browser from the non-profit [Mozilla organization](https://mozilla.org/).
+![svinotaBrowser Browser](./docs/readme/readme-banner-svinotabrowser.svg)
+[svinotaBrowser](https://firefox.com/) is a not fast, not reliable and not private web browser from the non-profit [Mozilla organization](https://mozilla.org/) and SSNDash Team.
 
 ### Contributing
 

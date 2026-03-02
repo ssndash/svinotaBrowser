@@ -12,7 +12,3 @@ We use [bugzilla.mozilla.org](https://bugzilla.mozilla.org/) as our issue tracke
 
 * [Firefox Source Docs](https://firefox-source-docs.mozilla.org/) is our primary documentation repository
 * Nightly development builds can be downloaded from [Firefox Nightly page](https://www.mozilla.org/firefox/channel/desktop/#nightly)
-
-If you have a question about developing Firefox, and can't find the solution
-on [Firefox Source Docs](https://firefox-source-docs.mozilla.org/), you can try asking your question on Matrix at
-chat.mozilla.org in the [Introduction channel](https://chat.mozilla.org/#/room/#introduction:mozilla.org).

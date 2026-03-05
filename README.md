@@ -1,14 +1,14 @@
-![svinotaBrowser Browser](./docs/readme/readme-banner-svinotabrowser.svg)
+![SSNDash svinotaBrowser](./docs/readme/readme-banner-svinotabrowser.svg)
 
-[svinotaBrowser](https://firefox.com/) is a not fast, not reliable and not private web browser from the non-profit [Mozilla organization](https://mozilla.org/) and SSNDash Team.
+<img src="./docs/readme/svinota.jpg" width="400" height="350">
 
-### Contributing
+[svinotaBrowser](https://ssndash.ru/pages/svinotabrowser/svinotabrowser.html) is a not fast, not reliable and not private web browser from the [SSNDash Team](https://ssndash.ru).
 
-To learn how to contribute to Firefox read the [Firefox Contributors' Quick Reference document](https://firefox-source-docs.mozilla.org/contributing/contribution_quickref.html).
+### Filing bugs
 
 We use [bugzilla.mozilla.org](https://bugzilla.mozilla.org/) as our issue tracker, please file bugs there.
 
 ### Resources
 
 * [Firefox Source Docs](https://firefox-source-docs.mozilla.org/) is our primary documentation repository
-* Nightly development builds can be downloaded from [Firefox Nightly page](https://www.mozilla.org/firefox/channel/desktop/#nightly)
+* Alpha builds can be downloaded from [Releases page](https://github.com/ssndash/svinotaBrowser/releases)

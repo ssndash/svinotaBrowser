@@ -6,24 +6,23 @@ plugins {
 android {
     namespace = "com.svinota.Browser"
     compileSdk {
-        version = release(36) {
-            minorApiLevel = 1
-        }
+        version = release(37)
     }
 
     defaultConfig {
         applicationId = "com.svinota.Browser"
         minSdk = 23
         targetSdk = 36
-        versionCode = 12
-        versionName = "alpha-10"
+        versionCode = 13
+        versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -48,7 +47,7 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
-    implementation("androidx.compose.material3:material3:1.4.0")
+    implementation("androidx.compose.material3:material3:1.5.0-alpha20")
     implementation("androidx.compose.material:material-icons-core")
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

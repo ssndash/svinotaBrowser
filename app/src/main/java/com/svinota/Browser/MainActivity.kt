@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.util.Base64
+import android.view.MotionEvent
 import android.view.View
 import android.webkit.CookieManager
 import android.webkit.URLUtil
@@ -62,7 +63,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -74,8 +74,11 @@ import java.util.Locale
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
-import com.svinota.Browser.R
-
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.net.HttpURLConnection
+import java.net.URL
+import androidx.compose.animation.core.animateDpAsState
 val LogoFont = FontFamily(Font(R.font.comic_neue_bold, FontWeight.Bold))
 
 data class Tab(
@@ -83,12 +86,14 @@ data class Tab(
     var url: MutableState<String> = mutableStateOf(""),
     var webView: WebView? = null,
     var favicon: MutableState<Bitmap?> = mutableStateOf(null),
-    var isDesktopMode: MutableState<Boolean> = mutableStateOf(false)
+    var isDesktopMode: MutableState<Boolean> = mutableStateOf(false),
+    var isLoading: MutableState<Boolean> = mutableStateOf(false)
 )
 
 @Composable
 fun t(en: String, ru: String, forcedLang: String? = null): String {
-    val locale = forcedLang ?: Locale.getDefault().language
+    val defaultLang = remember { Locale.getDefault().language }
+    val locale = forcedLang ?: defaultLang
     return if (locale == "ru") ru else en
 }
 
@@ -116,11 +121,12 @@ class MainActivity : ComponentActivity() {
         setContent {
             val context = LocalContext.current
             val prefs = remember { context.getSharedPreferences("svinota_prefs", Context.MODE_PRIVATE) }
+            val systemLang = remember { Locale.getDefault().language }
 
             var themeMode by remember { mutableIntStateOf(prefs.getInt("theme_mode", 0)) }
             var searchEngine by remember { mutableStateOf(prefs.getString("search_engine", "https://duckduckgo.com/?q=") ?: "https://duckduckgo.com/?q=") }
-            var appLang by remember { mutableStateOf(prefs.getString("app_lang", Locale.getDefault().language) ?: "en") }
-            var barPosition by remember { mutableIntStateOf(prefs.getInt("bar_position", 0)) } // 0 = Bottom, 1 = Top
+            var appLang by remember { mutableStateOf(prefs.getString("app_lang", systemLang) ?: "en") }
+            var barPosition by remember { mutableIntStateOf(prefs.getInt("bar_position", 0)) }
 
             val useDynamicColors = (themeMode == 1 || themeMode == 3) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
             val isDark = themeMode >= 2
@@ -167,7 +173,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun SvinotaBrowser(
     initialUrl: String,
@@ -296,7 +302,6 @@ fun SvinotaBrowser(
     var newBookmarkName by remember { mutableStateOf("") }
     var newBookmarkUrl by remember { mutableStateOf("") }
 
-    // Логика скрытия навбара при скролле (только если он сверху)
     var isBarVisible by remember { mutableStateOf(true) }
     val barTranslationY by animateFloatAsState(
         targetValue = if (barPosition == 1 && !isBarVisible && activeTab.url.value.isNotEmpty()) -100f else 0f,
@@ -304,7 +309,6 @@ fun SvinotaBrowser(
         label = "BarTranslation"
     )
 
-    // Сбрасываем видимость бара при переключении табов или переходе на главную
     LaunchedEffect(activeTabId, activeTab.url.value) {
         isBarVisible = true
     }
@@ -352,7 +356,7 @@ fun SvinotaBrowser(
         }
     }
 
-    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+    CompositionLocalProvider(LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Rtl) {
         ModalNavigationDrawer(
             drawerState = drawerState,
             gesturesEnabled = drawerState.isOpen,
@@ -362,7 +366,7 @@ fun SvinotaBrowser(
                     modifier = Modifier.width(300.dp).fillMaxHeight(),
                     drawerContainerColor = MaterialTheme.colorScheme.surface
                 ) {
-                    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                    CompositionLocalProvider(LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Ltr) {
                         Column(Modifier.padding(20.dp).verticalScroll(rememberScrollState())) {
                             Text(t("Wallpaper Settings", "Настройки обоев", currentLang), fontSize = 18.sp, fontWeight = FontWeight.Bold)
                             Spacer(Modifier.height(24.dp))
@@ -481,7 +485,7 @@ fun SvinotaBrowser(
                         } else Modifier
                     )
             ) {
-                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                CompositionLocalProvider(LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Ltr) {
                     Scaffold { padding ->
                         Box(
                             Modifier
@@ -508,10 +512,8 @@ fun SvinotaBrowser(
                                 )
                             }
 
-                            // КОНТЕНТ СТРАНИЦЫ (Сайт или Главный экран)
                             Box(modifier = Modifier.fillMaxSize()) {
                                 if (activeTab.url.value.isEmpty()) {
-                                    // Главная страница: если бар сверху, делаем отступ, чтобы логотип и закладки съехали ниже
                                     Column(
                                         Modifier
                                             .fillMaxSize()
@@ -593,21 +595,29 @@ fun SvinotaBrowser(
                                         }
                                     }
                                 } else {
-                                    Box(Modifier.fillMaxSize()) {
-                                        tabs.forEach { tab ->
-                                            val isCurrent = tab.id == activeTabId
+                                    tabs.forEach { tab ->
+                                        val isCurrent = tab.id == activeTabId
 
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .alpha(if (isCurrent) 1f else 0f)
+                                        ) {
                                             AndroidView(
                                                 factory = { ctx ->
                                                     WebView(ctx).apply {
+                                                        overScrollMode = View.OVER_SCROLL_NEVER
+                                                        setBackgroundColor(0xFFFFFFFF.toInt())
                                                         webViewClient = object : WebViewClient() {
                                                             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                                                                tab.isLoading.value = true
                                                                 if (url != null && !url.startsWith("data:") && url != "about:blank") {
                                                                     tab.url.value = url
                                                                     saveTabsState()
                                                                 }
                                                             }
                                                             override fun onPageFinished(view: WebView?, url: String?) {
+                                                                tab.isLoading.value = false
                                                                 if (url != null && !url.startsWith("data:") && url != "about:blank") {
                                                                     tab.url.value = url
                                                                     saveTabsState()
@@ -620,6 +630,7 @@ fun SvinotaBrowser(
                                                                 }
                                                             }
                                                             override fun onReceivedError(view: WebView?, errorCode: Int, description: String?, failingUrl: String?) {
+                                                                tab.isLoading.value = false
                                                                 val names = listOf("tvrshk", "KS51", "guganator3000", "Letexe", "michael dodo pizza", "Timofya453")
                                                                 val bgHex = String.format("#%06X", (0xFFFFFF and bgColor.toArgb()))
                                                                 val textHex = String.format("#%06X", (0xFFFFFF and textColor.toArgb()))
@@ -669,14 +680,13 @@ fun SvinotaBrowser(
                                                         settings.domStorageEnabled = true
                                                         settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
 
-                                                        // Слушатель скролла для скрытия/показа верхнего навбара
                                                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                                                             setOnScrollChangeListener { _, _, scrollY, _, oldScrollY ->
                                                                 if (barPosition == 1) {
                                                                     if (scrollY > oldScrollY && scrollY > 20) {
-                                                                        isBarVisible = false // Скролл вниз -> прячем
+                                                                        isBarVisible = false
                                                                     } else if (scrollY < oldScrollY) {
-                                                                        isBarVisible = true  // Скролл вверх -> показываем
+                                                                        isBarVisible = true
                                                                     }
                                                                 }
                                                             }
@@ -704,23 +714,43 @@ fun SvinotaBrowser(
                                                         webView.clearFocus()
                                                     }
                                                 },
-                                                modifier = Modifier
-                                                    .fillMaxSize()
-                                                    .alpha(if (isCurrent) 1f else 0.01f)
+                                                modifier = Modifier.fillMaxSize()
                                             )
+
+                                            // Expressive Loading Indicator Overlay
+                                            AnimatedVisibility(
+                                                visible = tab.isLoading.value && isCurrent,
+                                                enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
+                                                exit = fadeOut() + slideOutVertically(targetOffsetY = { -it }),
+                                                modifier = Modifier
+                                                    .align(Alignment.TopCenter)
+                                                    .padding(top = 16.dp)
+                                            ) {
+                                                Surface(
+                                                    shape = CircleShape,
+                                                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                                    shadowElevation = 6.dp
+                                                ) {
+                                                    Box(
+                                                        modifier = Modifier.padding(6.dp),
+                                                        contentAlignment = Alignment.Center
+                                                    ) {
+                                                        LoadingIndicator(modifier = Modifier.size(36.dp))
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
                             }
 
-                            // НАВЕРХНУТЫЙ НАВБАР (Перекрывает всё поверх, без подложки самого ряда)
                             Row(
                                 modifier = Modifier
                                     .align(if (barPosition == 1) Alignment.TopCenter else Alignment.BottomCenter)
                                     .graphicsLayer {
-                                        // Применяем смещение по оси Y для анимации скрытия (умножаем на плотность пикселей)
                                         translationY = barTranslationY * density
                                     }
+                                    .imePadding()
                                     .padding(16.dp)
                                     .fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically
@@ -918,14 +948,38 @@ fun SvinotaBrowser(
                         }
                     }
                     "history" -> {
-                        Text(t("History", "История", currentLang), fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(8.dp))
-                        LazyColumn(Modifier.heightIn(max = 300.dp)) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text(t("History", "История", currentLang), fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(8.dp))
+                            // Если захочешь добавить кнопку полной очистки истории, ее можно вставить сюда (как плюс в закладках)
+                        }
+                        LazyColumn(
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.heightIn(max = 300.dp)
+                        ) {
                             items(history.reversed()) { url ->
-                                ListItem(headlineContent = { Text(url, maxLines = 1) }, modifier = Modifier.clickable {
-                                    activeTab.url.value = url
-                                    saveTabsState()
-                                    showMenuSheet = false
-                                })
+                                val domain = url.removePrefix("https://").removePrefix("http://").split("/").firstOrNull() ?: url
+
+                                ListItem(
+                                    headlineContent = { Text(domain, maxLines = 1) },
+                                    supportingContent = { Text(url, maxLines = 1) },
+                                    trailingContent = {
+                                        IconButton(onClick = {
+                                            val updatedHistory = history - url
+                                            history = updatedHistory
+                                            dataPrefs.edit().putStringSet("history", updatedHistory.toSet()).apply()
+                                        }) { Icon(Icons.Default.Delete, null) }
+                                    },
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(16.dp))
+                                        .clickable {
+                                            activeTab.url.value = url
+                                            saveTabsState()
+                                            showMenuSheet = false
+                                        },
+                                    colors = ListItemDefaults.colors(
+                                        containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+                                    )
+                                )
                             }
                         }
                     }
@@ -1112,9 +1166,9 @@ fun SvinotaBrowser(
             title = { Text(t("Add Bookmark", "Новая закладка", currentLang)) },
             text = {
                 Column {
-                    OutlinedTextField(value = newBookmarkName, onValueChange = { newBookmarkName = it }, label = { Text(t("Name", "Название", currentLang)) }, singleLine = true)
+                    PlatformTextField(newBookmarkName, { newBookmarkName = it }, t("Name", "Название", currentLang))
                     Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(value = newBookmarkUrl, onValueChange = { newBookmarkUrl = it }, label = { Text("URL") }, singleLine = true)
+                    PlatformTextField(newBookmarkUrl, { newBookmarkUrl = it }, "URL")
                 }
             },
             confirmButton = {
@@ -1131,6 +1185,11 @@ fun SvinotaBrowser(
             dismissButton = { TextButton(onClick = { showAddBookmarkDialog = false }) { Text(t("Cancel", "Отмена", currentLang)) } }
         )
     }
+}
+
+@Composable
+fun PlatformTextField(value: String, onValueChange: (String) -> Unit, labelText: String) {
+    OutlinedTextField(value = value, onValueChange = onValueChange, label = { Text(labelText) }, singleLine = true)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1171,25 +1230,132 @@ fun SettingsScreen(
     var showAboutPage by remember { mutableStateOf(false) }
 
     if (showAboutPage) {
-        Scaffold(topBar = { TopAppBar(title = { Text(t("About", "О программе", currentLang)) }, navigationIcon = { IconButton(onClick = { showAboutPage = false }) { Icon(Icons.Default.ArrowBack, null) } }) }) { padding ->
+        val currentVersion = "1.0" // Твоя текущая версия
+        var isCheckingUpdates by remember { mutableStateOf(false) }
+        var updateStatusMessage by remember { mutableStateOf<String?>(null) }
+        var newVersionUrl by remember { mutableStateOf<String?>(null) }
+        var showUpdateDialog by remember { mutableStateOf(false) }
+        val scope = rememberCoroutineScope()
+
+        // Анимация размера логотипа
+        val logoSize by animateDpAsState(if (isCheckingUpdates) 48.dp else 80.dp, label = "logoSize")
+
+        // ПРЕДВАРИТЕЛЬНО получаем переводы, так как t() - это @Composable функция,
+        // и её нельзя вызывать внутри onClick или в корутинах.
+        val updateAvailableTxt = t("Update available:", "Доступно обновление:", currentLang)
+        val latestVersionTxt = t("Running latest version", "Установлена последняя версия", currentLang)
+        val serverErrorTxt = t("Server error", "Ошибка сервера", currentLang)
+        val networkErrorTxt = t("Network error", "Ошибка сети", currentLang)
+
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text(t("About", "О программе", currentLang)) },
+                    navigationIcon = {
+                        IconButton(onClick = { showAboutPage = false }) {
+                            Icon(Icons.Default.ArrowBack, null)
+                        }
+                    }
+                )
+            }
+        ) { padding ->
             Column(
-                modifier = Modifier.padding(padding).fillMaxSize().padding(24.dp).verticalScroll(rememberScrollState()),
+                modifier = Modifier
+                    .padding(padding)
+                    .fillMaxSize()
+                    .padding(24.dp)
+                    .verticalScroll(rememberScrollState()),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Image(
-                    painter = painterResource(id = R.drawable.icon),
-                    contentDescription = null,
-                    modifier = Modifier
-                        .size(80.dp)
-                        .clip(RoundedCornerShape(22.dp))
-                )
-                Spacer(Modifier.height(16.dp))
+                Box(modifier = Modifier.size(88.dp), contentAlignment = Alignment.Center) {
+                    if (isCheckingUpdates) {
+                        CircularWavyProgressIndicator(
+                            modifier = Modifier.fillMaxSize(),
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Image(
+                        painter = painterResource(id = R.drawable.icon),
+                        contentDescription = "App Logo",
+                        modifier = Modifier.size(logoSize).clip(RoundedCornerShape(22.dp))
+                    )
+                }
+
+                Spacer(Modifier.height(10.dp))
                 Text("svinotaBrowser", fontSize = 24.sp, fontFamily = LogoFont)
-                Text("Version: alpha-10", fontSize = 14.sp, color = Color.Gray)
-                Spacer(Modifier.height(8.dp))
-                Text(t("By SSNDash Team", "Разработчик: SSNDash Team", currentLang), textAlign = TextAlign.Center, fontSize = 14.sp)
+                Spacer(modifier = Modifier.height(2.dp))
+                Text("Version $currentVersion", fontSize = 14.sp, color = Color.Gray)
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Text(
+                    text = t("Check for updates", "Проверить обновления", currentLang),
+                    color = if (isCheckingUpdates) Color.Gray else MaterialTheme.colorScheme.primary,
+                    fontSize = 16.sp,
+                    modifier = Modifier
+                        .clickable(enabled = !isCheckingUpdates) {
+                            isCheckingUpdates = true
+                            updateStatusMessage = null
+
+                            scope.launch(Dispatchers.IO) {
+                                try {
+                                    val url = URL("https://api.github.com/repos/ssndash/svinotaBrowser-android/releases/latest")
+                                    val connection = url.openConnection() as HttpURLConnection
+                                    connection.requestMethod = "GET"
+                                    connection.setRequestProperty("Accept", "application/vnd.github.v3+json")
+
+                                    if (connection.responseCode == 200) {
+                                        val response = connection.inputStream.bufferedReader().readText()
+                                        val json = JSONObject(response)
+                                        val latestVersion = json.getString("tag_name")
+
+                                        withContext(Dispatchers.Main) {
+                                            isCheckingUpdates = false
+                                            if (latestVersion != currentVersion && latestVersion != "v$currentVersion") {
+                                                val assets = json.optJSONArray("assets")
+                                                if (assets != null && assets.length() > 0) {
+                                                    newVersionUrl = assets.getJSONObject(0).getString("browser_download_url")
+                                                } else {
+                                                    newVersionUrl = json.getString("html_url")
+                                                }
+                                                // Используем заранее заготовленную строку
+                                                updateStatusMessage = "$updateAvailableTxt $latestVersion"
+                                                showUpdateDialog = true
+                                            } else {
+                                                // Используем заранее заготовленную строку
+                                                updateStatusMessage = latestVersionTxt
+                                            }
+                                        }
+                                    } else {
+                                        withContext(Dispatchers.Main) {
+                                            isCheckingUpdates = false
+                                            // Используем заранее заготовленную строку
+                                            updateStatusMessage = serverErrorTxt
+                                        }
+                                    }
+                                } catch (e: Exception) {
+                                    withContext(Dispatchers.Main) {
+                                        isCheckingUpdates = false
+                                        // Используем заранее заготовленную строку
+                                        updateStatusMessage = networkErrorTxt
+                                    }
+                                }
+                            }
+                        }
+                        .padding(vertical = 4.dp, horizontal = 8.dp)
+                )
+
+                if (isCheckingUpdates) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(text = t("Checking...", "Проверка...", currentLang), fontSize = 12.sp, color = Color.Gray)
+                } else if (updateStatusMessage != null) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(text = updateStatusMessage!!, fontSize = 12.sp, color = Color.Gray)
+                }
 
                 Spacer(Modifier.height(32.dp))
+                Text(t("By SSNDash Team", "Разработчик: SSNDash Team", currentLang), textAlign = TextAlign.Center, fontSize = 14.sp)
+                Spacer(Modifier.height(16.dp))
+
                 Text(t("License", "Лицензия", currentLang), fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Start))
                 Spacer(Modifier.height(8.dp))
                 Text(
@@ -1200,9 +1366,33 @@ fun SettingsScreen(
                     ),
                     fontSize = 12.sp,
                     color = Color.Gray,
-                    textAlign = TextAlign.Start
+                    modifier = Modifier.align(Alignment.Start)
                 )
             }
+        }
+
+        if (showUpdateDialog) {
+            AlertDialog(
+                onDismissRequest = { showUpdateDialog = false },
+                title = { Text(t("New Update!", "Новое обновление!", currentLang)) },
+                text = { Text(t("A new version of svinotaBrowser is available. Do you want to download it?", "Доступна новая версия svinotaBrowser. Хотите скачать её?", currentLang)) },
+                confirmButton = {
+                    Button(onClick = {
+                        showUpdateDialog = false
+                        newVersionUrl?.let { url ->
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                            context.startActivity(intent)
+                        }
+                    }) {
+                        Text(t("Download", "Скачать", currentLang))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showUpdateDialog = false }) {
+                        Text(t("Later", "Позже", currentLang))
+                    }
+                }
+            )
         }
     } else {
         Scaffold(topBar = { TopAppBar(title = { Text(t("Settings", "Настройки", currentLang)) }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, null) } }) }) { padding ->
@@ -1252,7 +1442,6 @@ fun SettingsScreen(
                 }
                 Spacer(Modifier.height(16.dp))
 
-                // ВЫБОР ПОЛОЖЕНИЯ НАВБАРA
                 Box(Modifier.padding(horizontal = 16.dp)) {
                     ExposedDropdownMenuBox(expanded = barExpanded, onExpandedChange = { barExpanded = !barExpanded }) {
                         OutlinedTextField(
